@@ -16,10 +16,9 @@ if 'page_config_set' not in st.session_state:
 
 
 # --- Configuration ---
-# Update model paths to reflect their new location in the 'models' directory
-AUDIO_MODEL_PATH = 'models/best_model.keras' # Corrected based on previous debug
-VIDEO_MODEL_PATH = 'models/final_resnet50_deepfake.keras'  # Corrected based on previous debug
-TEMP_FILES_DIR = 'temp_files' # Directory for temporary uploads
+AUDIO_MODEL_PATH = 'models/best_model.keras'
+VIDEO_MODEL_PATH = 'models/final_resnet50_deepfake.keras'
+TEMP_FILES_DIR = 'temp_files'
 os.makedirs(TEMP_FILES_DIR, exist_ok=True) # Ensure the temp directory exists
 
 # --- Load Models (Cached for performance) ---
@@ -43,7 +42,6 @@ with col1:
         st.audio(audio_file, format='audio/wav')
         st.write("Processing audio...")
 
-        # Save uploaded audio to a temporary file
         temp_audio_path = os.path.join(TEMP_FILES_DIR, "temp_audio.wav")
         try:
             with st.spinner("Saving audio file..."):
@@ -68,8 +66,7 @@ with col1:
             else:
                 st.error("Audio preprocessing failed. Please check the file and terminal for details.")
         finally:
-            # Clean up the temporary audio file
-            cleanup_temp_files(temp_audio_path=temp_audio_path, temp_video_path=None) # Only clean audio
+            cleanup_temp_files(temp_audio_path=temp_audio_path, temp_video_path=None)
 
 
 with col2:
@@ -77,18 +74,57 @@ with col2:
     video_file = st.file_uploader("Upload a video file (.mp4, .avi, .mov)", type=["mp4", "avi", "mov"])
 
     if video_file is not None:
-        st.video(video_file)
-        st.write("Processing video...")
+        
 
-        # Save uploaded video to a temporary file
-        temp_video_path = os.path.join(TEMP_FILES_DIR, "temp_video.mp4")
+        original_temp_path = os.path.join(TEMP_FILES_DIR, "temp_video_original.mp4")
+        playable_temp_path = os.path.join(TEMP_FILES_DIR, "temp_video_playable.mp4")
+
+        # Initialize these outside the try block so finally can access them
+        # They will only exist if saving and transcoding were successful,
+        # but their paths will always be defined.
+        temp_video_path_to_cleanup = None
+        playable_video_path_to_cleanup = None
+
         try:
-            with st.spinner("Saving video file..."):
-                with open(temp_video_path, "wb") as f:
+            # 1. Save original video
+            with st.spinner("Saving original video file..."):
+                with open(original_temp_path, "wb") as f:
                     f.write(video_file.getbuffer())
+                temp_video_path_to_cleanup = original_temp_path # Assign for cleanup
 
-            # Preprocess video to get a list of faces, then predict on them
-            preprocessed_faces_list = preprocess_video(temp_video_path)
+            st.write(f"DEBUG: Original video saved to: {original_temp_path}")
+            if os.path.exists(original_temp_path):
+                st.write(f"DEBUG: Original file exists. Size: {os.path.getsize(original_temp_path) / (1024*1024):.2f} MB")
+            else:
+                st.error("DEBUG: Original video file not found on disk after saving!")
+                # If file not found, we can't proceed. Raise an exception or just let the outer try catch it.
+                raise FileNotFoundError("Original video file could not be saved or found.")
+
+
+            # 2. Convert video for playback compatibility
+            with st.spinner("Converting video for playback compatibility (this may take a moment)..."):
+                try:
+                    from moviepy.editor import VideoFileClip # Import here for local scope if not global
+                    video_clip = VideoFileClip(original_temp_path)
+                    video_clip.write_videofile(playable_temp_path, codec="libx264", audio_codec="aac", verbose=False, logger=None)
+                    video_clip.close()
+                    playable_video_path_to_cleanup = playable_temp_path # Assign for cleanup
+                    st.success("Video converted successfully for playback.")
+                    st.video(playable_temp_path) # Play the newly transcoded file!
+                except Exception as e:
+                    st.error(f"Error during video conversion for playback: {e}. Attempting to play original file instead.")
+                    print(f"DEBUG: Video conversion failed: {e}")
+                    # Fallback to playing the original if conversion fails
+                    if os.path.exists(original_temp_path):
+                        st.video(original_temp_path)
+                    else:
+                        st.error("Original video file not found for fallback playback.")
+                    # Don't raise here, allow prediction part to run even if playback conversion fails
+
+            st.write("Processing video for deepfake detection...")
+
+            # 3. Preprocess video for model. Use the ORIGINAL video file for model input.
+            preprocessed_faces_list = preprocess_video(original_temp_path)
 
             if preprocessed_faces_list is not None and preprocessed_faces_list:
                 with st.spinner("Analyzing video..."):
@@ -110,9 +146,17 @@ with col2:
                     st.error("Video prediction failed. Check terminal for details.")
             else:
                 st.error("Video preprocessing failed. Could not detect any clear faces in the video for analysis, or an error occurred during face processing. Please check the file and terminal for details.")
+
+        except Exception as e: # This broad except catches any unhandled errors from above steps
+            st.error(f"An unexpected error occurred during video processing: {e}")
+            print(f"ERROR: Video processing failed: {e}")
+
         finally:
-            # Clean up the temporary video file
-            cleanup_temp_files(temp_audio_path=None, temp_video_path=temp_video_path) # Only clean video
+            # Clean up both original and playable temp files
+            cleanup_temp_files(temp_audio_path=None, temp_video_path=temp_video_path_to_cleanup)
+            if playable_video_path_to_cleanup and os.path.exists(playable_video_path_to_cleanup):
+                os.remove(playable_video_path_to_cleanup)
+                print(f"DEBUG: Removed {playable_video_path_to_cleanup}")
 
 
 # --- Sidebar Information ---
@@ -131,8 +175,3 @@ st.sidebar.markdown("""
 3.  **Prediction:** The respective Keras model predicts the likelihood of the input being a deepfake.
 4.  **Result:** The app displays the confidence score and a clear "Likely Deepfake" or "Likely Real" status.
 """)
-
-# Call cleanup when the app closes (optional, as temp files are handled in finally blocks now)
-# This might not always execute reliably in Streamlit's lifecycle,
-# so inline cleanup in finally blocks is more robust.
-# You could add a button for manual cleanup if needed.
