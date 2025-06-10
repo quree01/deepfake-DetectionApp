@@ -24,3 +24,5 @@ temp_files/
 *.mp4
 *.avi
 *.mov
+
+temp_app.py

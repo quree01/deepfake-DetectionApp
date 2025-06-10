@@ -1,168 +1,32 @@
+# app.py
 import streamlit as st
-import tensorflow as tf
-import numpy as np
-import librosa
-import cv2
-# Adjust this import based on whether you downgraded moviepy or changed the import
-from moviepy.editor import VideoFileClip # Or from moviepy.video.io.VideoFileClip import VideoFileClip
-from mtcnn import MTCNN
+import os
 
-# --- ABSOLUTE FIRST STREAMLIT COMMAND ---
-# This MUST be the first Streamlit command in your entire script.
-st.set_page_config(page_title="Deepfake Detection App", layout="wide")
-# --- END OF ABSOLUTE FIRST STREAMLIT COMMAND ---
+# Import functions from your newly created modules
+from src.models import load_audio_model, load_video_model
+from src.preprocessing import preprocess_audio, preprocess_video
+from src.prediction import predict_audio_deepfake, predict_video_deepfake
+from src.utils import cleanup_temp_files
 
-# --- Configuration (can be anywhere after imports) ---
-AUDIO_MODEL_PATH = 'final_model.keras'
-VIDEO_MODEL_PATH = 'best_model.keras'
+# --- Streamlit Page Configuration (MUST be the absolute first Streamlit command) ---
+if 'page_config_set' not in st.session_state:
+    st.set_page_config(page_title="Deepfake Detection App", layout="wide")
+    st.session_state['page_config_set'] = True
+# --- END OF PAGE CONFIG WORKAROUND ---
+
+
+# --- Configuration ---
+# Update model paths to reflect their new location in the 'models' directory
+AUDIO_MODEL_PATH = 'models/best_model.keras' # Corrected based on previous debug
+VIDEO_MODEL_PATH = 'models/final_resnet50_deepfake.keras'  # Corrected based on previous debug
+TEMP_FILES_DIR = 'temp_files' # Directory for temporary uploads
+os.makedirs(TEMP_FILES_DIR, exist_ok=True) # Ensure the temp directory exists
 
 # --- Load Models (Cached for performance) ---
-# These functions and their calls must come *after* st.set_page_config
-@st.cache_resource
-def load_audio_model(path):
-    # Added print for debugging file path
-    print(f"DEBUG: Attempting to load audio model from: {path}")
-    model = tf.keras.models.load_model(path)
-    return model
-
-@st.cache_resource
-def load_video_model(path):
-    # Added print for debugging file path
-    print(f"DEBUG: Attempting to load video model from: {path}")
-    model = tf.keras.models.load_model(path)
-    return model
-
-# Initialize models and detector after page config.
-# If these lines are causing the issue, it means their internal initialization
-# is somehow triggering Streamlit before st.set_page_config() is processed.
 audio_model = load_audio_model(AUDIO_MODEL_PATH)
 video_model = load_video_model(VIDEO_MODEL_PATH)
 
-# Initialize MTCNN detector
-detector = MTCNN() # This needs to be imported and initialized
-
-# --- Preprocessing Functions ---
-
-# Keep preprocess_audio as discussed, you need to confirm its exact requirements
-def preprocess_audio(audio_file_path):
-    # This function is highly dependent on how YOUR specific audio model was trained.
-    # The example below assumes MFCC features, 40 n_mfcc, and a fixed length.
-    try:
-        y, sr = librosa.load(audio_file_path, sr=16000) # Assuming 16kHz was used for training
-        mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
-
-        # Pad or truncate MFCCs to a fixed length (e.g., 100 frames)
-        # You MUST verify the exact sequence length your audio model expects.
-        target_mfcc_length = 100
-        if mfccs.shape[1] < target_mfcc_length:
-            pad_width = target_mfcc_length - mfccs.shape[1]
-            mfccs = np.pad(mfccs, ((0, 0), (0, pad_width)), mode='constant')
-        else:
-            mfccs = mfccs[:, :target_mfcc_length]
-
-        # Add batch and channel dimensions if your model expects them (e.g., (1, 40, 100, 1))
-        # This depends on your model's input shape.
-        mfccs = np.expand_dims(mfccs, axis=0) # Add batch dimension
-        mfccs = np.expand_dims(mfccs, axis=-1) # Add channel dimension if it's a CNN expecting (batch, height, width, channels)
-
-        return mfccs
-    except Exception as e:
-        st.error(f"Error processing audio: {e}")
-        return None
-
-def preprocess_video(video_file_path):
-    # Based on the GitHub repo's main.py, it involves face detection and cropping.
-    frames_processed = []
-    deepfake_predictions_per_frame = [] # To store predictions for each detected face
-
-    cap = cv2.VideoCapture(video_file_path)
-    if not cap.isOpened():
-        st.error("Error: Could not open video file.")
-        return None, None # Return None for both preprocessed input and predictions
-
-    frame_count = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break # End of video
-
-        frame_count += 1
-        # Process every Nth frame to speed things up for web app
-        # You might adjust this based on video length and desired speed
-        if frame_count % 5 != 0: # Process every 5th frame, adjust as needed
-            continue
-
-        # Convert to RGB (MTCNN expects RGB)
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        # Detect faces using MTCNN
-        faces = detector.detect_faces(rgb_frame)
-
-        for face in faces:
-            x, y, width, height = face['box']
-            # Expand bounding box slightly for better face capture
-            margin_x = int(0.1 * width)
-            margin_y = int(0.1 * height)
-            x1, y1 = max(0, x - margin_x), max(0, y - margin_y)
-            x2, y2 = min(frame.shape[1], x + width + margin_x), min(frame.shape[0], y + height + margin_y)
-
-            face_img = frame[y1:y2, x1:x2]
-
-            if face_img.size == 0: # Skip empty face images
-                continue
-
-            # Resize to the model's expected input size (e.g., 224x224)
-            face_img_resized = cv2.resize(face_img, (224, 224))
-            # Convert BGR to RGB if your Keras model expects RGB (common)
-            face_img_rgb = cv2.cvtColor(face_img_resized, cv2.COLOR_BGR2RGB)
-            # Normalize pixel values
-            face_img_normalized = face_img_rgb / 255.0
-
-            # Add batch dimension
-            processed_face = np.expand_dims(face_img_normalized, axis=0)
-
-            # Predict for each detected face
-            prediction_score = predict_video_deepfake(video_model, processed_face)
-            if prediction_score is not None:
-                deepfake_predictions_per_frame.append(prediction_score)
-            
-            # Optional: If you only care about one face per frame, break
-            # break
-
-    cap.release()
-    
-    if not deepfake_predictions_per_frame:
-        st.warning("No faces detected in the video or error during processing.")
-        return None, None
-
-    # Aggregate predictions: e.g., take the average or median
-    # For a binary classification, you might consider the proportion of "fake" predictions
-    # If the majority of detected faces are fake, classify the video as fake.
-    # Or, if any face is confidently fake, classify as fake.
-    
-    # Simple average for now
-    avg_prediction = np.mean(deepfake_predictions_per_frame)
-    return avg_prediction, deepfake_predictions_per_frame # Return overall prediction and individual frame predictions
-
-# --- Prediction Functions (slightly modified to return the direct score) ---
-def predict_audio_deepfake(model, preprocessed_input):
-    if preprocessed_input is None:
-        return None
-    # Ensure input shape matches model.input_shape before prediction
-    # You might need to add a check here if shape doesn't match
-    prediction = model.predict(preprocessed_input)[0][0] # Assuming binary classification, single output
-    return prediction
-
-def predict_video_deepfake(model, preprocessed_input):
-    if preprocessed_input is None:
-        return None
-    # Ensure input shape matches model.input_shape before prediction
-    # You might need to add a check here if shape doesn't match
-    prediction = model.predict(preprocessed_input)[0][0] # Assuming binary classification, single output
-    return prediction
-
-# --- Streamlit UI (modified for video) ---
-st.set_page_config(page_title="Deepfake Detection App", layout="wide")
+# --- Streamlit UI Elements ---
 st.title("Deepfake Audio & Video Detector")
 
 st.markdown("""
@@ -179,28 +43,34 @@ with col1:
         st.audio(audio_file, format='audio/wav')
         st.write("Processing audio...")
 
-        with st.spinner("Saving audio file..."):
-            temp_audio_path = "temp_audio.wav"
-            with open(temp_audio_path, "wb") as f:
-                f.write(audio_file.getbuffer())
+        # Save uploaded audio to a temporary file
+        temp_audio_path = os.path.join(TEMP_FILES_DIR, "temp_audio.wav")
+        try:
+            with st.spinner("Saving audio file..."):
+                with open(temp_audio_path, "wb") as f:
+                    f.write(audio_file.getbuffer())
 
-        preprocessed_audio_input = preprocess_audio(temp_audio_path)
+            preprocessed_audio_input = preprocess_audio(temp_audio_path)
 
-        if preprocessed_audio_input is not None:
-            with st.spinner("Analyzing audio..."):
-                audio_prediction = predict_audio_deepfake(audio_model, preprocessed_audio_input)
+            if preprocessed_audio_input is not None:
+                with st.spinner("Analyzing audio..."):
+                    audio_prediction = predict_audio_deepfake(audio_model, preprocessed_audio_input)
 
-            if audio_prediction is not None:
-                st.subheader("Audio Analysis Result:")
-                if audio_prediction > 0.5:
-                    st.error(f"**Likely Deepfake Audio!** (Confidence: {audio_prediction:.2f})")
+                if audio_prediction is not None:
+                    st.subheader("Audio Analysis Result:")
+                    if audio_prediction > 0.5:
+                        st.error(f"**Likely Deepfake Audio!** (Confidence: {audio_prediction:.2f})")
+                    else:
+                        st.success(f"**Likely Real Audio!** (Confidence: {1 - audio_prediction:.2f})")
+                    st.write(f"Raw Prediction Score: {audio_prediction:.4f}")
                 else:
-                    st.success(f"**Likely Real Audio!** (Confidence: {1 - audio_prediction:.2f})")
-                st.write(f"Raw Prediction Score: {audio_prediction:.4f}")
+                    st.error("Audio prediction failed. Check terminal for details.")
             else:
-                st.error("Audio prediction failed.")
-        else:
-            st.error("Audio preprocessing failed. Please check the file.")
+                st.error("Audio preprocessing failed. Please check the file and terminal for details.")
+        finally:
+            # Clean up the temporary audio file
+            cleanup_temp_files(temp_audio_path=temp_audio_path, temp_video_path=None) # Only clean audio
+
 
 with col2:
     st.header("Video Deepfake Detection")
@@ -210,29 +80,42 @@ with col2:
         st.video(video_file)
         st.write("Processing video...")
 
-        with st.spinner("Saving video file..."):
-            temp_video_path = "temp_video.mp4"
-            with open(temp_video_path, "wb") as f:
-                f.write(video_file.getbuffer())
+        # Save uploaded video to a temporary file
+        temp_video_path = os.path.join(TEMP_FILES_DIR, "temp_video.mp4")
+        try:
+            with st.spinner("Saving video file..."):
+                with open(temp_video_path, "wb") as f:
+                    f.write(video_file.getbuffer())
 
-        # Call preprocess_video, which now also returns individual predictions
-        overall_video_prediction, frame_predictions = preprocess_video(temp_video_path)
+            # Preprocess video to get a list of faces, then predict on them
+            preprocessed_faces_list = preprocess_video(temp_video_path)
 
-        if overall_video_prediction is not None:
-            st.subheader("Video Analysis Result:")
-            if overall_video_prediction > 0.5:
-                st.error(f"**Likely Deepfake Video!** (Overall Confidence: {overall_video_prediction:.2f})")
+            if preprocessed_faces_list is not None and preprocessed_faces_list:
+                with st.spinner("Analyzing video..."):
+                    overall_video_prediction, frame_predictions = predict_video_deepfake(video_model, preprocessed_faces_list)
+
+                if overall_video_prediction is not None:
+                    st.subheader("Video Analysis Result:")
+                    if overall_video_prediction > 0.5:
+                        st.error(f"**Likely Deepfake Video!** (Overall Confidence: {overall_video_prediction:.2f})")
+                    else:
+                        st.success(f"**Likely Real Video!** (Overall Confidence: {1 - overall_video_prediction:.2f})")
+                    st.write(f"Raw Overall Prediction Score: {overall_video_prediction:.4f}")
+
+                    if frame_predictions:
+                        st.write("Individual face prediction scores (first 10, if available):", [f"{p:.2f}" for p in frame_predictions[:10]])
+                        if len(frame_predictions) > 10:
+                            st.write("...")
+                else:
+                    st.error("Video prediction failed. Check terminal for details.")
             else:
-                st.success(f"**Likely Real Video!** (Overall Confidence: {1 - overall_video_prediction:.2f})")
-            st.write(f"Raw Overall Prediction Score: {overall_video_prediction:.4f}")
+                st.error("Video preprocessing failed. Could not detect any clear faces in the video for analysis, or an error occurred during face processing. Please check the file and terminal for details.")
+        finally:
+            # Clean up the temporary video file
+            cleanup_temp_files(temp_audio_path=None, temp_video_path=temp_video_path) # Only clean video
 
-            if frame_predictions:
-                st.write("Individual frame prediction scores (first 10):", [f"{p:.2f}" for p in frame_predictions[:10]])
-                if len(frame_predictions) > 10:
-                    st.write("...")
-        else:
-            st.error("Video processing or prediction failed. Please check the file.")
 
+# --- Sidebar Information ---
 st.sidebar.header("About This App")
 st.sidebar.markdown("""
 This application demonstrates the capability of AI models to detect deepfake audio and video.
@@ -249,14 +132,7 @@ st.sidebar.markdown("""
 4.  **Result:** The app displays the confidence score and a clear "Likely Deepfake" or "Likely Real" status.
 """)
 
-# --- Cleanup (Optional, but good practice for temp files) ---
-import os
-def cleanup_temp_files():
-    if os.path.exists("temp_audio.wav"):
-        os.remove("temp_audio.wav")
-    if os.path.exists("temp_video.mp4"):
-        os.remove("temp_video.mp4")
-
-# Streamlit reruns the script, so cleanup should be handled carefully.
-# For now, files are simply overwritten. For deployment, consider st.session_state
-# or specific cleanup routines.
+# Call cleanup when the app closes (optional, as temp files are handled in finally blocks now)
+# This might not always execute reliably in Streamlit's lifecycle,
+# so inline cleanup in finally blocks is more robust.
+# You could add a button for manual cleanup if needed.
