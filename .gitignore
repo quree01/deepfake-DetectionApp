@@ -1,0 +1,26 @@
+# Virtual environment
+myenv/
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Streamlit related
+.streamlit/
+
+# Keras models (if they are very large and you prefer not to store them in Git)
+# models/*.keras
+# However, for now, let's keep models/ so they are pushed
+# but be aware if they exceed Git's size limits or GitHub's single file limit (100MB).
+# For very large models, you'd use Git LFS.
+
+# Temporary files
+temp_files/
+*.wav
+*.mp3
+*.mp4
+*.avi
+*.mov
