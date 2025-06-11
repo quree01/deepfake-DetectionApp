@@ -8,6 +8,7 @@ from src.preprocessing import preprocess_audio, preprocess_video
 from src.prediction import predict_audio_deepfake, predict_video_deepfake
 from src.utils import cleanup_temp_files
 
+import src.custom_losses
 # --- Streamlit Page Configuration (MUST be the absolute first Streamlit command) ---
 if 'page_config_set' not in st.session_state:
     st.set_page_config(page_title="Deepfake Detection App", layout="wide")
@@ -17,7 +18,7 @@ if 'page_config_set' not in st.session_state:
 
 # --- Configuration ---
 AUDIO_MODEL_PATH = 'models/best_model.keras'
-VIDEO_MODEL_PATH = 'models/final_resnet50_deepfake.keras'
+VIDEO_MODEL_PATH = 'models/final_faceforensics_resnet50.keras'
 TEMP_FILES_DIR = 'temp_files'
 os.makedirs(TEMP_FILES_DIR, exist_ok=True) # Ensure the temp directory exists
 
