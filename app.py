@@ -9,6 +9,7 @@ from src.prediction import predict_audio_deepfake, predict_video_deepfake
 from src.utils import cleanup_temp_files
 
 import src.custom_losses
+
 # --- Streamlit Page Configuration (MUST be the absolute first Streamlit command) ---
 if 'page_config_set' not in st.session_state:
     st.set_page_config(page_title="Deepfake Detection App", layout="wide")
