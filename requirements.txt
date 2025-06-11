@@ -2,7 +2,7 @@
 streamlit==1.45.1
 tensorflow-cpu==2.15.0
 protobuf==4.23.4  # FIXED: TensorFlow 2.15.0 requires protobuf < 5.0.0dev
-numpy==1.26.4     # FIXED: TensorFlow 2.15.0 requires numpy < 2.0.0
+numpy==1.24.4     # FIXED: TensorFlow 2.15.0 requires numpy < 2.0.0
 h5py==3.10.0      # Adjusted for compatibility with TF 2.15.0 and numpy 1.26.4
 
 # OpenCV and Image processing
